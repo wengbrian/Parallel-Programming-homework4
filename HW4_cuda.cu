@@ -235,15 +235,15 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
     for (int i = 0; i < num_block; i++){
         // copy needed row block
         int idx_x = Round*B + threadIdx.x + i*32; // k_x
-        //if((idx_x < (Round+1)*B) && (idx_x < n) && (tidy < n)){
-        if(true){
+        if((idx_x < (Round+1)*B) && (idx_x < n) && (tidy < n)){
+        //if(true){
             int *row = (int *)((char*)d_ptr + tidy * pitch);
             rowBlock[threadIdx.y][threadIdx.x] = row[idx_x];
         }
         // copy needed col block
         int idx_y = Round*B + threadIdx.y + i*32;
-        //if((idx_y < (Round+1)*B) && (idx_y < n) && (tidx < n)){
-        if(true){
+        if((idx_y < (Round+1)*B) && (idx_y < n) && (tidx < n)){
+        //if(true){
             int *row = (int *)((char*)d_ptr + idx_y * pitch);
             colBlock[threadIdx.y][threadIdx.x] = row[tidx];
         }
