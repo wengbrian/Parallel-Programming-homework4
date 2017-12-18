@@ -127,7 +127,9 @@ void block_FW(int B)
         int num_block_height = ceil(B,32);
         dim3 grid(num_block_width, num_block_height);
 		cal<<<grid,block,size>>>(B,	r,	r,	r,	1,	1, n, d_ptr, pitch, num_block, debug);
-        cudaDeviceSynchronize();
+        cudaError_t cudaerr = cudaDeviceSynchronize();
+        if (cudaerr != cudaSuccess)
+            printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
 
 		/* Phase 2*/
         if(r > 0){
@@ -135,26 +137,37 @@ void block_FW(int B)
             int num_block_height = ceil(B*r,32);
             dim3 grid(num_block_width, num_block_height);
             cal<<<grid,block,size>>>(B, r, r, 0, 1, r, n, d_ptr, pitch, num_block, debug); // up
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if(round-r-1 > 0){
             int num_block_width = ceil(B,32);
             int num_block_height = ceil(B*(round-r-1),32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, r, r+1, 1, round-r-1, n, d_ptr, pitch, num_block, debug); // down
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if(r > 0){
             int num_block_width = ceil(B*r,32);
             int num_block_height = ceil(B,32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, 0, r, r, 1, n, d_ptr, pitch, num_block, debug); // left
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if(round-r-1 > 0){
             int num_block_width = ceil(B*(round-r-1),32);
             int num_block_height = ceil(B,32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, r+1, r, round-r-1, 1, n, d_ptr, pitch, num_block, debug); // right
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
-        cudaDeviceSynchronize();
 
 		/* Phase 3*/
         if(r > 0){
@@ -162,27 +175,37 @@ void block_FW(int B)
             int num_block_height = ceil(B*r,32);
             dim3 grid(num_block_width, num_block_height);
             cal<<<grid,block,size>>>(B, r, 0, 0, r, r, n, d_ptr, pitch, num_block, debug); // left-up
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if((round-r-1 > 0) && (r > 0)){
             int num_block_width = ceil(B*r,32);
             int num_block_height = ceil(B*(round-r-1),32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, 0, r+1, r, round-r-1, n, d_ptr, pitch, num_block, debug); // left-down
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if((round-r-1 > 0) && (r > 0)){
             int num_block_width = ceil(B*(round-r-1),32);
             int num_block_height = ceil(B*r,32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, r +1, 0, round-r-1, r, n, d_ptr, pitch, num_block, debug); // right-up
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
         if(round-r-1 > 0){
             int num_block_width = ceil(B*(round-r-1),32);
             int num_block_height = ceil(B*(round-r-1),32);
             dim3 grid(num_block_width, num_block_height);
 		    cal<<<grid,block,size>>>(B, r, r+1, r+1, round-r-1, round-r-1, n, d_ptr, pitch, num_block, debug); // right-down
+            cudaError_t cudaerr = cudaDeviceSynchronize();
+            if (cudaerr != cudaSuccess)
+                printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
         }
-        cudaDeviceSynchronize();
-        
 	}
     if(debug)
         test<<<1,1>>>(d_ptr, pitch, n);
@@ -193,29 +216,20 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
 {
     int size = B < 32 ? B : 32;
     // shared memory
-    __shared__ int mem[3072];
-    int *dist = mem;
-    int *rowBlock = dist + 1024;
-    int *colBlock = rowBlock + 1024;
+    __shared__ int dist[32][32];
+    __shared__ int rowBlock[32][32];
+    __shared__ int colBlock[32][32];
 
-    // num block for each part
-    //int num_block_width = gridDim.x;
-    //int num_block_height = gridDim.y;
-
-    int idx = threadIdx.y * blockDim.x + threadIdx.x; // internal index, used by dist
-    int tidx = block_start_x * B + 
-               blockIdx.x * blockDim.x + 
-               threadIdx.x; // external index, used by d_ptr
-    int tidy = block_start_y * B +
-               blockIdx.y * blockDim.y + 
-               threadIdx.y; // external index, used by d_ptr
     int b_x = blockIdx.x * blockDim.x + threadIdx.x;
     int b_y = blockIdx.y * blockDim.y + threadIdx.y;
+    int tidx = block_start_x * B + b_x;
+    int tidy = block_start_y * B + b_y;
     // copy memory from global memory to shared memory
     // copy current block
     if ((tidx < n) && (tidy < n) && (b_x < block_width*B) && (b_y < block_height*B)){
         int *row = (int *)((char*)d_ptr + tidy * pitch);
-        dist[idx] = row[tidx]; 
+        dist[threadIdx.y][threadIdx.x] = row[tidx]; 
+        //if(debug)printf("[%d,%d][ex_tidx=%d, ex_tidy=%d][in_tidx=%d, in_tidy=%d][b_x=%d, b_y=%d]\n",  blockIdx.x, blockIdx.y, tidx, tidy, threadIdx.x, threadIdx.y, b_x, b_y);
     }
 
     for (int i = 0; i < num_block; i++){
@@ -224,29 +238,32 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
         //if((idx_x < (Round+1)*B) && (idx_x < n) && (tidy < n)){
         if(true){
             int *row = (int *)((char*)d_ptr + tidy * pitch);
-            rowBlock[idx] = row[idx_x];
-            //printf("copy d[%d][%d] = %d\n", tidx, tidy, row[idx_x]);
+            rowBlock[threadIdx.y][threadIdx.x] = row[idx_x];
         }
-
         // copy needed col block
         int idx_y = Round*B + threadIdx.y + i*32;
         //if((idx_y < (Round+1)*B) && (idx_y < n) && (tidx < n)){
         if(true){
             int *row = (int *)((char*)d_ptr + idx_y * pitch);
-            colBlock[idx] = row[tidx];
-            //printf("copy d[%d][%d] = %d\n", tidx, tidy, row[idx_x]);
+            colBlock[threadIdx.y][threadIdx.x] = row[tidx];
         }
         __syncthreads();
 
         // current k = Round*B ~ Round*B+size-1
         for(int k = 0; (k < size) && (Round*B+k < n); k++){
-            //if ((tidx < n) && (tidy < n) && (b_x < block_width*B) && (b_y < block_height*B)){
+            //if(threadIdx.x+threadIdx.y==0)printf("[k=%d]\n", k);
             if ((tidx < n) && (tidy < n) && (b_x < block_width*B) && (b_y < block_height*B)){
-                int ik = rowBlock[threadIdx.y*32+k];
-                int kj = colBlock[k*32+threadIdx.x];
-                if(debug)printf("[%d,%d][k=%d, ex_tidx=%d, ex_tidy=%d, in_tidx=%d, in_tidy=%d, idx=%d] if %d + %d < %d\n", blockIdx.x, blockIdx.y, Round*B+k, tidx, tidy, threadIdx.x, threadIdx.y, idx, ik, kj, dist[idx]);
-                if (ik + kj < dist[idx]) {
-                    dist[idx] = ik + kj;
+                int ik = rowBlock[threadIdx.y][k];
+                int kj = colBlock[k][threadIdx.x];
+                //if(debug)if(blockIdx.y==5)printf("[%d/%d][%d,%d][k=%d][ex_tidx=%d, ex_tidy=%d][in_tidx=%d, in_tidy=%d][b_x=%d, b_y=%d]\n", i+1, num_block, blockIdx.x, blockIdx.y, Round*B+k, tidx, tidy, threadIdx.x, threadIdx.y, b_x, b_y);
+                if (ik + kj < dist[threadIdx.y][threadIdx.x]) {
+                    dist[threadIdx.y][threadIdx.x] = ik + kj;
+                    if((tidx >= Round*B) && (tidx < (Round+1)*B)){
+                        rowBlock[threadIdx.y][threadIdx.x] = ik+kj;
+                    }
+                    if((tidy >= Round*B) && (tidy < (Round+1)*B)){
+                        colBlock[threadIdx.y][threadIdx.x] = ik+kj;
+                    }
                 }
             }
             __syncthreads();
@@ -256,7 +273,7 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
     // copy shared memory to global memory
     if ((tidx < n) && (tidy < n) && (b_x < block_width*B) && (b_y < block_height*B)){
         int *row = (int *)((char*)d_ptr + tidy * pitch);
-        row[tidx] = dist[idx]; 
+        row[tidx] = dist[threadIdx.y][threadIdx.x]; 
     }
 }
 
