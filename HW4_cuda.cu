@@ -8,13 +8,13 @@ void input(char *inFileName);
 void output(char *outFileName);
 int *d_ptr;
 size_t pitch;
-int size = 3*1024*sizeof(int);
+int size = 3*32*32*sizeof(int);
 dim3 block(32,32);
 
 void block_FW(int B);
 int ceil(int a, int b);
-__global__ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
-void kernel(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
+__global__ void cal(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
+void kernel(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
 
 int n, m;	// Number of vertices, edges
 static int Dist[V][V];
@@ -82,12 +82,13 @@ void test(int *d_ptr, size_t pitch, int n){
     }
 }
 
-void kernel(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch){
-    int num_block_width = ceil(B*block_width,32);
-    int num_block_height = ceil(B*block_height,32);
+void kernel(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch){
+    int num_block_width = ceil(32*block_width,32);
+    int num_block_height = ceil(32*block_height,32);
     dim3 grid(num_block_width, num_block_height);
-    cal<<<grid,block,size>>>(B, Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
+    cal<<<grid,block,size>>>(Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
 }
+
 void block_FW(int B)
 {
     // copy memory to host
@@ -96,57 +97,56 @@ void block_FW(int B)
 
     // num round
 	int round = ceil(n, B);
-    cudaError_t cudaerr;
+    //cudaError_t cudaerr;
 	for (int r = 0; r < round; ++r) {
 
 		/* Phase 1*/
-		kernel(B, r, r, r, 1, 1, n, d_ptr, pitch);
-        cudaerr = cudaDeviceSynchronize();
-        if (cudaerr != cudaSuccess)
-            printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
+		kernel(r, r, r, 1, 1, n, d_ptr, pitch);
+        //cudaerr = cudaDeviceSynchronize();
+        //if (cudaerr != cudaSuccess)
+        //    printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
 
 		/* Phase 2*/
         if(r > 0){
-            kernel(B, r, r, 0, 1, r, n, d_ptr, pitch); // up
+            kernel(r, r, 0, 1, r, n, d_ptr, pitch); // up
         }
         if(round-r-1 > 0){
-		    kernel(B, r, r, r+1, 1, round-r-1, n, d_ptr, pitch); // down
+		    kernel(r, r, r+1, 1, round-r-1, n, d_ptr, pitch); // down
         }
         if(r > 0){
-		    kernel(B, r, 0, r, r, 1, n, d_ptr, pitch); // left
+		    kernel(r, 0, r, r, 1, n, d_ptr, pitch); // left
         }
         if(round-r-1 > 0){
-		    kernel(B, r, r+1, r, round-r-1, 1, n, d_ptr, pitch); // right
+		    kernel(r, r+1, r, round-r-1, 1, n, d_ptr, pitch); // right
         }
-        cudaerr = cudaDeviceSynchronize();
-        if (cudaerr != cudaSuccess)
-            printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
+        //cudaerr = cudaDeviceSynchronize();
+        //if (cudaerr != cudaSuccess)
+        //    printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
 
 		/* Phase 3*/
         if(r > 0){
-            kernel(B, r, 0, 0, r, r, n, d_ptr, pitch); // left-up
+            kernel(r, 0, 0, r, r, n, d_ptr, pitch); // left-up
         }
         if((round-r-1 > 0) && (r > 0)){
-		    kernel(B, r, 0, r+1, r, round-r-1, n, d_ptr, pitch); // left-down
+		    kernel(r, 0, r+1, r, round-r-1, n, d_ptr, pitch); // left-down
         }
         if((round-r-1 > 0) && (r > 0)){
-		    kernel(B, r, r +1, 0, round-r-1, r, n, d_ptr, pitch); // right-up
+		    kernel(r, r +1, 0, round-r-1, r, n, d_ptr, pitch); // right-up
         }
         if(round-r-1 > 0){
-		    kernel(B, r, r+1, r+1, round-r-1, round-r-1, n, d_ptr, pitch); // right-down
+		    kernel(r, r+1, r+1, round-r-1, round-r-1, n, d_ptr, pitch); // right-down
         }
-        cudaerr = cudaDeviceSynchronize();
-        if (cudaerr != cudaSuccess)
-            printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
+        //cudaerr = cudaDeviceSynchronize();
+        //if (cudaerr != cudaSuccess)
+        //    printf("kernel launch failed with error \"%s\".\n",cudaGetErrorString(cudaerr));
 	}
     cudaMemcpy2D(&Dist, V * sizeof(int), d_ptr, pitch, n * sizeof(int), n, cudaMemcpyDeviceToHost);
     cudaFree(d_ptr);
 }
 
 __global__
-void cal(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch)
+void cal(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch)
 {
-    int size = B < 32 ? B : 32;
     // shared memory
     __shared__ int dist[32][32];
     __shared__ int rowBlock[32][32];
@@ -154,11 +154,12 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
 
     int b_x = blockIdx.x * blockDim.x + threadIdx.x;
     int b_y = blockIdx.y * blockDim.y + threadIdx.y;
-    int tidx = block_start_x * B + b_x;
-    int tidy = block_start_y * B + b_y;
-    int inRange = (tidx < n) && (tidy < n)&& (b_x < block_width*B) && (b_y < block_height*B); 
-    int k_start = Round*B; // k_start
-    int k_end = (Round+1)*B;
+    int tidx = block_start_x * 32 + b_x;
+    int tidy = block_start_y * 32 + b_y;
+    //int inRange = (tidx < n) && (tidy < n) && (b_x < block_width*32) && (b_y < block_height*32); 
+    int inRange = (tidx < n) && (tidy < n); 
+    int k_start = Round*32; // k_start
+    int k_end = (Round+1)*32;
     // copy current block
     if (inRange){
         int *row = (int *)((char*)d_ptr + tidy * pitch);
@@ -180,7 +181,7 @@ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width
     __syncthreads();
 
     // current k = Round*B ~ Round*B+size-1
-    for(int k = 0; (k < size) && (k_start+k < n); k++){
+    for(int k = 0; (k < 32) && (k_start+k < n); k++){
         if (inRange){
             int ik = rowBlock[threadIdx.y][k];
             int kj = colBlock[k][threadIdx.x];
