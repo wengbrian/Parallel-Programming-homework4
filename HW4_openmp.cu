@@ -21,15 +21,13 @@ void test2();
 int n, m;	// Number of vertices, edges
 static int Dist[V][V];
 int* d=&Dist[0][0];
-int debug = 2;
+int debug = -1;
 
 int main(int argc, char* argv[])
 {
 	input(argv[1]);
 	int B = atoi(argv[3]);
-    //test2();
 	block_FW(B);
-    //test2();
 	output(argv[2]);
 
 	return 0;
@@ -107,12 +105,25 @@ void test2(){
     printf("\n");
 }
 
+void test3(int a, int b){
+    cudaError_t cudaerr = cudaDeviceSynchronize();
+    if (cudaerr != cudaSuccess)
+        printf("kernel launch failed with error \"%s\".\n", cudaGetErrorString(cudaerr));
+    printf("\nhost:(%d,%d)\n",a,b);
+    for(int i = 0; i < n; i++){
+        for(int j = 0; j < n; j++){
+            printf("%4d", Dist[i][j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
 
 void kernel(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch, cudaStream_t stream){
     //int num_block_width = ceil(32*block_width,32);
     //int num_block_height = ceil(32*block_height,32);
     dim3 grid(block_width, block_height);
-    cal<<<grid,block,size>>>(Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
+    cal<<<grid,block,size, 0>>>(Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
     cudaError_t cudaerr = cudaDeviceSynchronize();
     if (cudaerr != cudaSuccess)
         printf("[%s]kernel launch failed with error \"%s\".\n", "kernel", cudaGetErrorString(cudaerr));
@@ -126,6 +137,7 @@ void myCudaMemcpy2D(void *dst, size_t dpitch, const void *src, size_t spitch, si
 
 void myCudaMemcpy2DAsync(void *dst, size_t dpitch, const void *src, size_t spitch, size_t width, size_t height, enum cudaMemcpyKind kind, cudaStream_t stream, int tid, int a, int b){
     cudaError_t cudaerr = cudaMemcpy2DAsync(dst, dpitch, src, spitch, width, height, kind, stream);   
+    //cudaError_t cudaerr = cudaMemcpy2D(dst, dpitch, src, spitch, width, height, kind);   
     if (cudaerr != cudaSuccess)
         printf("[%d,%s,%d,%d]kernel launch failed with error \"%s\".\n", tid, "memcpy2d", a, b, cudaGetErrorString(cudaerr));
 }
@@ -173,6 +185,11 @@ void block_FW(int B)
         // allocate memory and copy memory to device
         myCudaMallocPitch(&(d_ptr[tid]), &(pitch[tid]), n * sizeof(int), n, tid);
         myCudaDeviceSynchronize(tid, "wait malloc");
+
+        cudaStream_t stream[4];
+        for (int i = 0; i < 4; ++i)
+            cudaStreamCreate(&stream[i]);
+
         #pragma omp barrier
 
         myCudaMemcpy2D(d_ptr[tid], pitch[tid], d, V * sizeof(int), n * sizeof(int), n, cudaMemcpyHostToDevice, tid, 0,0);
@@ -192,119 +209,108 @@ void block_FW(int B)
             }
             if(tid == 0){
                 // outer
-                kernel(r, idx[2], idx[2], width[2], width[2], n, d_ptr[tid], pitch[tid], 0); // (3,3)
-				
+                kernel(r, idx[2], idx[2], width[2], width[2], n, d_ptr[tid], pitch[tid], stream[0]); // (3,3)
+
                 if(width[0] > 0){
-                    kernel(r, idx[2], idx[0], width[2], width[0], n, d_ptr[tid], pitch[tid], 0); // (3,1)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 3,1,r);
+                    kernel(r, idx[2], idx[0], width[2], width[0], n, d_ptr[tid], pitch[tid], stream[0]); // (3,1)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 3,1,r);
                 }
                 if(width[4] > 0){
-                    kernel(r, idx[2], idx[4], width[2], width[4], n, d_ptr[tid], pitch[tid], 0); // (3,5)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 3,5,r);
+                    kernel(r, idx[2], idx[4], width[2], width[4], n, d_ptr[tid], pitch[tid], stream[0]); // (3,5)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 3,5,r);
                 }
                 if(width[0] > 0){
-                    kernel(r, idx[0], idx[2], width[0], width[2], n, d_ptr[tid], pitch[tid], 0); // (1,3)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,3,r);
-                    //test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,3,r);
+                    kernel(r, idx[0], idx[2], width[0], width[2], n, d_ptr[tid], pitch[tid], stream[0]); // (1,3)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 1,3,r);
                 }
                 if(width[4] > 0){
-                    kernel(r, idx[4], idx[2], width[4], width[2], n, d_ptr[tid], pitch[tid], 0); // (5,3)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 5,3,r);
+                    kernel(r, idx[4], idx[2], width[4], width[2], n, d_ptr[tid], pitch[tid], stream[0]); // (5,3)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 5,3,r);
                 }
 
-                /////////////////////////////////////////
-                myCudaDeviceSynchronize(tid, "wait first cal");
-				/////////////////////////////////////////
-
-				if(width[0] > 0){
-                    kernel(r, idx[0], idx[0], width[0], width[0], n, d_ptr[tid], pitch[tid], 0); // outer-left-up (1,1)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,1,r);
-                }
-                if((width[0] > 0) && (width[4] > 0)){
-                    kernel(r, idx[0], idx[4], width[0], width[4], n, d_ptr[tid], pitch[tid], 0); // outer-left-down (1,5)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,5,r);
-                }
-                if((width[0] > 0) && (width[4] > 0)){
-                    kernel(r, idx[4], idx[0], width[4], width[0], n, d_ptr[tid], pitch[tid], 0); // outer-right-up (5,1)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 5,1,r);
-                }
-                if(width[4] > 0){
-                    kernel(r, idx[4], idx[4], width[4], width[4], n, d_ptr[tid], pitch[tid], 0); // right-down (5,5)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 5,5,r);
-                }
-				
                 if(range[0] > 0){ // copy (3,1)
                     offset  = idx[2]*32*sizeof(int);
 					offset2 = idx[2]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[2]*sizeof(int), range[0], cudaMemcpyDeviceToHost, tid, 3, 1);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[tid]+offset, pitch[tid], range[2]*sizeof(int), range[0], cudaMemcpyDeviceToHost, stream[0], tid, 3, 1);   
                 }
                 if(range[4] > 0){ // copy(3,5)
-                    offset  = idx[4]*32*pitch[0] + idx[2]*32*sizeof(int);
+                    offset  = idx[4]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[4]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[2]*sizeof(int), range[4], cudaMemcpyDeviceToHost, tid, 3, 5);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[tid]+offset, pitch[tid], range[2]*sizeof(int), range[4], cudaMemcpyDeviceToHost, stream[0], tid, 3, 5);   
                 }
                 if(range[0] > 0){ // copy (1,3)
-                    offset  = idx[2]*32*pitch[0];
+                    offset  = idx[2]*32*pitch[tid];
                     offset2 = idx[2]*32*V;
-                   // test2();
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[0]*sizeof(int), range[2], cudaMemcpyDeviceToHost, tid, 1, 3);   
-                    //test2();
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[tid]+offset, pitch[tid], range[0]*sizeof(int), range[2], cudaMemcpyDeviceToHost, stream[0], tid, 1, 3);   
                 }
                 if(range[4] > 0){ // copy (5,3)
-                    offset  = idx[2]*32*pitch[0] + idx[4]*32*sizeof(int);
+                    offset  = idx[2]*32*pitch[tid] + idx[4]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[4]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[4]*sizeof(int), range[2], cudaMemcpyDeviceToHost, tid, 5, 3);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[tid]+offset, pitch[tid], range[4]*sizeof(int), range[2], cudaMemcpyDeviceToHost, stream[0], tid, 5, 3);   
+                }
+
+				if(width[0] > 0){
+                    kernel(r, idx[0], idx[0], width[0], width[0], n, d_ptr[tid], pitch[tid], stream[0]); // outer-left-up (1,1)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 1,1,r);
+                }
+                if((width[0] > 0) && (width[4] > 0)){
+                    kernel(r, idx[0], idx[4], width[0], width[4], n, d_ptr[tid], pitch[tid], stream[0]); // outer-left-down (1,5)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 1,5,r);
+                }
+                if((width[0] > 0) && (width[4] > 0)){
+                    kernel(r, idx[4], idx[0], width[4], width[0], n, d_ptr[tid], pitch[tid], stream[0]); // outer-right-up (5,1)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 5,1,r);
+                }
+                if(width[4] > 0){
+                    kernel(r, idx[4], idx[4], width[4], width[4], n, d_ptr[tid], pitch[tid], stream[0]); // right-down (5,5)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 5,5,r);
                 }
                 
 				/////////////////////////////////////////
+                myCudaDeviceSynchronize(tid, "wait phase3");
                 #pragma omp barrier
 				/////////////////////////////////////////
 
-				// copy memory from host to device
                 if(range[1] > 0){ // copy(3,2)
-                    offset =  idx[1]*32*pitch[0] + idx[2]*32*sizeof(int);
+                    offset =  idx[1]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[1]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D((char*)d_ptr[0]+offset, pitch[0], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[1], cudaMemcpyHostToDevice, tid, 3,2);   
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 3, 2,r);
+                    myCudaMemcpy2DAsync((char*)d_ptr[0]+offset, pitch[tid], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[1], cudaMemcpyHostToDevice, stream[0], tid, 3,2);   
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 3, 2,r);
                 }
-                if(range[2] > 0){ // copy(3,4)
-                    offset =  idx[3]*32*pitch[0] + idx[2]*32*sizeof(int);
+                if(range[3] > 0){ // copy(3,4)
+                    offset =  idx[3]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[3]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D((char*)d_ptr[0]+offset, pitch[0], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[3], cudaMemcpyHostToDevice, tid, 3,4);
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 3,4,r);
+                    myCudaMemcpy2DAsync((char*)d_ptr[0]+offset, pitch[tid], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[3], cudaMemcpyHostToDevice, stream[0], tid, 3,4);
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 3,4,r);
                 }
                 if(range[1] > 0){ // copy(2,3)
-                    offset =  idx[2]*32*pitch[0] + idx[1]*32*sizeof(int);
+                    offset =  idx[2]*32*pitch[tid] + idx[1]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[1]*32;
-                    myCudaMemcpy2D((char*)d_ptr[0]+offset, pitch[0], d+offset2, V*sizeof(int), range[1]*sizeof(int), range[2], cudaMemcpyHostToDevice, tid,2,3);   
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 2,3,r);
+                    myCudaMemcpy2DAsync((char*)d_ptr[0]+offset, pitch[tid], d+offset2, V*sizeof(int), range[1]*sizeof(int), range[2], cudaMemcpyHostToDevice, stream[0], tid, 2,3);   
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 2,3,r);
                 }
                 if(range[3] > 0){ // copy(4,3)
-                    offset =  idx[2]*32*pitch[0] + idx[3]*32*sizeof(int);
+                    offset =  idx[2]*32*pitch[tid] + idx[3]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[3]*32;
-                    myCudaMemcpy2D(((char*)d_ptr[0])+offset, pitch[0], d+offset2, V*sizeof(int), range[3]*sizeof(int), range[2], cudaMemcpyHostToDevice, tid,4,3);   
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 4,3,r);
+                    myCudaMemcpy2DAsync((char*)d_ptr[0]+offset, pitch[tid], d+offset2, V*sizeof(int), range[3]*sizeof(int), range[2], cudaMemcpyHostToDevice, stream[0], tid, 4,3);   
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 4,3,r);
                 }
 
-				/////////////////////////////////////////
-				myCudaDeviceSynchronize(tid, "wait phase2");
-                /////////////////////////////////////////
-				
                 if((width[0] > 0) && (width[1] > 0)){
-                    kernel(r, idx[0], idx[1], width[0], width[1], n, d_ptr[tid], pitch[tid], 0); // outer-left-up-grid (1,2)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,2,r);
+                    kernel(r, idx[0], idx[1], width[0], width[1], n, d_ptr[tid], pitch[tid], stream[0]); // outer-left-up-grid (1,2)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 1,2,r);
                 }
                 if((width[0] > 0) && (width[3] > 0)){
-                    kernel(r, idx[0], idx[3], width[0], width[3], n, d_ptr[tid], pitch[tid], 0); // outer-left-down-grid (1,4)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 1,4,r);
+                    kernel(r, idx[0], idx[3], width[0], width[3], n, d_ptr[tid], pitch[tid], stream[0]); // outer-left-down-grid (1,4)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 1,4,r);
                 }
                 if((width[1] > 0) && (width[4] > 0)){
-                    kernel(r, idx[4], idx[1], width[4], width[1], n, d_ptr[tid], pitch[tid], 0); // outer-right-up-grid (5,2)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 5,2,r);
+                    kernel(r, idx[4], idx[1], width[4], width[1], n, d_ptr[tid], pitch[tid], stream[0]); // outer-right-up-grid (5,2)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 5,2,r);
                 }
                 if((width[3] > 0) && (width[4] > 0)){
-                    kernel(r, idx[4], idx[3], width[4], width[3], n, d_ptr[tid], pitch[tid], 0); // outer-right-down-grid (5,4)
-                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, 5,4,r);
+                    kernel(r, idx[4], idx[3], width[4], width[3], n, d_ptr[tid], pitch[tid], stream[0]); // outer-right-down-grid (5,4)
+                    if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, 5,4,r);
                 }
 				
 				/////////////////////////////////////////
@@ -313,12 +319,12 @@ void block_FW(int B)
 				
                 if(range[0] > 0){
                     offset = idx[0];
-					myCudaMemcpy2D(d+offset, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[0]*sizeof(int), n, cudaMemcpyDeviceToHost, tid, -1, -1);
+					myCudaMemcpy2D(d+offset, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[tid], range[0]*sizeof(int), n, cudaMemcpyDeviceToHost, tid, -1, -1);
                 }
                 if(range[4] > 0){
                     offset =  idx[4]*32*sizeof(int);
 					offset2 = idx[4]*32;
-					myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[0], range[4]*sizeof(int), n, cudaMemcpyDeviceToHost, tid, -2, -2);
+					myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[0]+offset, pitch[tid], range[4]*sizeof(int), n, cudaMemcpyDeviceToHost, tid, -2, -2);
                 }
 				
 				/////////////////////////////////////////
@@ -328,120 +334,113 @@ void block_FW(int B)
 				// copy memory from host to device
 				offset =  idx[1]*32*sizeof(int);
 				offset2 = idx[1]*32;
-				myCudaMemcpy2D((char*)d_ptr[0]+offset, pitch[0], d+offset2, V*sizeof(int), (range[1]+range[2]+range[3])*sizeof(int), n, cudaMemcpyHostToDevice, tid,-3,-3);   
+				myCudaMemcpy2D((char*)d_ptr[0]+offset, pitch[tid], d+offset2, V*sizeof(int), (range[1]+range[2]+range[3])*sizeof(int), n, cudaMemcpyHostToDevice, tid,-3,-3);   
                 				
-                if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[0], n, -1,-1, r);
-                //test<<<1,1>>>(d_ptr[0], pitch[0], n, -1,-1, r);
+                if(debug==0)test<<<1,1>>>(d_ptr[0], pitch[tid], n, -1,-1, r);
+                //test<<<1,1>>>(d_ptr[0], pitch[tid], n, -1,-1, r);
                 //test2();
 
             }else if(tid == 1){
                 // inner 
-                kernel(r, r, r, 1, 1, n, d_ptr[tid], pitch[tid], 0); // (3,3)
+                kernel(r, r, r, 1, 1, n, d_ptr[tid], pitch[tid], stream[0]); // (3,3)
 				
                 if(width[1] > 0){
-                    kernel(r, idx[2], idx[1], width[2], width[1], n, d_ptr[tid], pitch[tid], 0); // (3,2)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 3,2, r);
+                    kernel(r, idx[2], idx[1], width[2], width[1], n, d_ptr[tid], pitch[tid], stream[0]); // (3,2)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 3,2, r);
                 }
                 if(width[3] > 0){
-                    kernel(r, idx[2], idx[3], width[2], width[3], n, d_ptr[tid], pitch[tid], 0); // (3,4)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 3,4, r);
+                    kernel(r, idx[2], idx[3], width[2], width[3], n, d_ptr[tid], pitch[tid], stream[0]); // (3,4)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 3,4, r);
                 }
                 if(width[1] > 0){
-                    kernel(r, idx[1], idx[2], width[1], width[2], n, d_ptr[tid], pitch[tid], 0); // (2,3)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 2,3, r);
+                    kernel(r, idx[1], idx[2], width[1], width[2], n, d_ptr[tid], pitch[tid], stream[0]); // (2,3)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 2,3, r);
                 }
                 if(width[3] > 0){
-                    kernel(r, idx[3], idx[2], width[3], width[2], n, d_ptr[tid], pitch[tid], 0); // (4,3)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 4,3, r);
-                }
-				
-                /////////////////////////////////////////
-                myCudaDeviceSynchronize(tid, "wait first cal");
-				/////////////////////////////////////////
-				
-				if(width[1] > 0){
-                    kernel(r, idx[1], idx[1], width[1], width[1], n, d_ptr[tid], pitch[tid], 0); // inner-left-up (2,2)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 2,2, r);
-                }
-                if((width[1] > 0) && (width[2] > 0)){
-                    kernel(r, idx[1], idx[3], width[1], width[3], n, d_ptr[tid], pitch[tid], 0); // inner-left-down (2,4)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 2,4, r);
-                }
-                if((width[1] > 0) && (width[2] > 0)){
-                    kernel(r, idx[3], idx[1], width[3], width[1], n, d_ptr[tid], pitch[tid], 0); // inner-right-up (4,2)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 4,2, r);
-                }
-                if(width[2] > 0){
-                    kernel(r, idx[3], idx[3], width[3], width[3], n, d_ptr[tid], pitch[tid], 0); // inner-right-down (4,4)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 4,4, r);
+                    kernel(r, idx[3], idx[2], width[3], width[2], n, d_ptr[tid], pitch[tid], stream[0]); // (4,3)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 4,3, r);
                 }
 				
                 if(range[1] > 0){ // copy (3,2)
-                    offset  = idx[1]*32*pitch[1] + idx[2]*32*sizeof(int);
+                    offset  = idx[1]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[1]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[1], range[2]*sizeof(int), range[1], cudaMemcpyDeviceToHost, tid, 3,2);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[tid], range[2]*sizeof(int), range[1], cudaMemcpyDeviceToHost, stream[0], tid, 3,2);   
                 }
-                if(range[2] > 0){ // copy (3,4)
-                    offset  = idx[3]*32*pitch[1] + idx[2]*32*sizeof(int);
+                if(range[3] > 0){ // copy (3,4)
+                    offset  = idx[3]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[3]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[1], range[2]*sizeof(int), range[3], cudaMemcpyDeviceToHost, tid, 3,4);
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[tid], range[2]*sizeof(int), range[3], cudaMemcpyDeviceToHost, stream[0], tid, 3,4);
                 }
                 if(range[1] > 0){ // copy (2,3)
-                    offset =  idx[2]*32*pitch[1] + idx[1]*32*sizeof(int);
+                    offset =  idx[2]*32*pitch[tid] + idx[1]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[1]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[1], range[1]*sizeof(int), range[2], cudaMemcpyDeviceToHost, tid, 2,3);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[tid], range[1]*sizeof(int), range[2], cudaMemcpyDeviceToHost, stream[0], tid, 2,3);   
                 }
                 if(range[3] > 0){ // copy (4,3)
-                    offset =  idx[2]*32*pitch[1] + idx[3]*32*sizeof(int);
+                    offset =  idx[2]*32*pitch[tid] + idx[3]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[3]*32;
-                    myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[1], range[3]*sizeof(int), range[2], cudaMemcpyDeviceToHost, tid, 4,3);   
+                    myCudaMemcpy2DAsync(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[tid], range[3]*sizeof(int), range[2], cudaMemcpyDeviceToHost, stream[0], tid, 4,3);   
+                }
+
+				if(width[1] > 0){
+                    kernel(r, idx[1], idx[1], width[1], width[1], n, d_ptr[tid], pitch[tid], stream[0]); // inner-left-up (2,2)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 2,2, r);
+                }
+                if((width[1] > 0) && (width[3] > 0)){
+                    kernel(r, idx[1], idx[3], width[1], width[3], n, d_ptr[tid], pitch[tid], stream[0]); // inner-left-down (2,4)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 2,4, r);
+                }
+                if((width[1] > 0) && (width[3] > 0)){
+                    kernel(r, idx[3], idx[1], width[3], width[1], n, d_ptr[tid], pitch[tid], stream[0]); // inner-right-up (4,2)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 4,2, r);
+                }
+                if(width[3] > 0){
+                    kernel(r, idx[3], idx[3], width[3], width[3], n, d_ptr[tid], pitch[tid], stream[0]); // inner-right-down (4,4)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 4,4, r);
                 }
 				
 				/////////////////////////////////////////
+                myCudaDeviceSynchronize(tid, "wait phase3");
 				#pragma omp barrier
                 /////////////////////////////////////////
 
                 if(range[0] > 0){ // copy (3,1)
                     offset =  idx[2]*32*sizeof(int);
 					offset2 = idx[2]*32;
-                    myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[0], cudaMemcpyHostToDevice, tid, 3, 1);   
+                    myCudaMemcpy2DAsync((char*)d_ptr[1]+offset, pitch[tid], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[0], cudaMemcpyHostToDevice, stream[0], tid, 3, 1);   
                 }
                 if(range[4] > 0){ // copy(3,5)
-                    offset =  idx[4]*32*pitch[1] + idx[2]*32*sizeof(int);
+                    offset =  idx[4]*32*pitch[tid] + idx[2]*32*sizeof(int);
                     offset2 = idx[4]*32*V        + idx[2]*32;
-                    myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[4], cudaMemcpyHostToDevice, tid, 3, 5);   
+                    myCudaMemcpy2DAsync((char*)d_ptr[1]+offset, pitch[tid], d+offset2, V*sizeof(int), range[2]*sizeof(int), range[4], cudaMemcpyHostToDevice, stream[0], tid, 3, 5);   
                 }
                 if(range[0] > 0){ // copy (1,3)
-                    offset =  idx[2]*32*pitch[1];
+                    offset =  idx[2]*32*pitch[tid];
                     offset2 = idx[2]*32*V;
-                    myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset2, V*sizeof(int), range[0]*sizeof(int), range[2], cudaMemcpyHostToDevice, tid, 1, 3);   
-                    //test<<<1,1>>>(d_ptr[1], pitch[1], n, 1,3,r);
+                    myCudaMemcpy2DAsync((char*)d_ptr[1]+offset, pitch[tid], d+offset2, V*sizeof(int), range[0]*sizeof(int), range[2], cudaMemcpyHostToDevice, stream[0], tid, 1, 3);   
+                    //test<<<1,1>>>(d_ptr[1], pitch[tid], n, 1,3,r);
                 }
                 if(range[4] > 0){ // copy (5,3)
-                    offset =  idx[2]*32*pitch[1] + idx[4]*32*sizeof(int);
+                    offset =  idx[2]*32*pitch[tid] + idx[4]*32*sizeof(int);
                     offset2 = idx[2]*32*V        + idx[4]*32;
-                    myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset2, V*sizeof(int), range[4]*sizeof(int), range[2], cudaMemcpyHostToDevice, tid, 5, 3);   
+                    myCudaMemcpy2DAsync((char*)d_ptr[1]+offset, pitch[tid], d+offset2, V*sizeof(int), range[4]*sizeof(int), range[2], cudaMemcpyHostToDevice, stream[0], tid, 5, 3);   
                 }
-				
-				/////////////////////////////////////////
-				myCudaDeviceSynchronize(tid, "wait phase2");
-                /////////////////////////////////////////
 
                 if((width[0] > 0) && (width[1] > 0)){
-                    kernel(r, idx[1], idx[0], width[1], width[0], n, d_ptr[tid], pitch[tid], 0); // outer-up-left-grid (2,1)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 2,1, r);
+                    kernel(r, idx[1], idx[0], width[1], width[0], n, d_ptr[tid], pitch[tid], stream[0]); // outer-up-left-grid (2,1)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 2,1, r);
                 }
                 if((width[0] > 0) && (width[3] > 0)){
-                    kernel(r, idx[3], idx[0], width[3], width[0],  n, d_ptr[tid], pitch[tid], 0); // outer-up-right-grid (4,1)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 4,1, r);
+                    kernel(r, idx[3], idx[0], width[3], width[0], n, d_ptr[tid], pitch[tid], stream[0]); // outer-up-right-grid (4,1)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 4,1, r);
                 }
                 if((width[1] > 0) && (width[4] > 0)){
-                    kernel(r, idx[1], idx[4], width[1], width[4], n, d_ptr[tid], pitch[tid], 0); // outer-right-up-grid (2,5)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 2,5, r);
+                    kernel(r, idx[1], idx[4], width[1], width[4], n, d_ptr[tid], pitch[tid], stream[0]); // outer-right-up-grid (2,5)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 2,5, r);
                 }
                 if((width[3] > 0) && (width[4] > 0)){
-                    kernel(r, idx[3], idx[4], width[3], width[4], n, d_ptr[tid], pitch[tid], 0); // outer-right-down-grid (4,5)
-                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, 4,5, r);
+                    kernel(r, idx[3], idx[4], width[3], width[4], n, d_ptr[tid], pitch[tid], stream[0]); // outer-right-down-grid (4,5)
+                    if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, 4,5, r);
                 }
 
 				/////////////////////////////////////////
@@ -450,7 +449,7 @@ void block_FW(int B)
 
                 offset =  idx[1]*32*sizeof(int);
 				offset2 = idx[1]*32;
-                myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[1], (range[1]+range[2]+range[3])*sizeof(int), n, cudaMemcpyDeviceToHost, tid,-1,-1);
+                myCudaMemcpy2D(d+offset2, V*sizeof(int), (char*)d_ptr[1]+offset, pitch[tid], (range[1]+range[2]+range[3])*sizeof(int), n, cudaMemcpyDeviceToHost, tid,-1,-1);
                 
 				/////////////////////////////////////////
 				#pragma omp barrier
@@ -458,15 +457,15 @@ void block_FW(int B)
 				
 				if(range[0] > 0){
                     offset = idx[0];
-					myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset, V*sizeof(int), range[0]*sizeof(int), n, cudaMemcpyHostToDevice, tid, -2, -2);
+					myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[tid], d+offset, V*sizeof(int), range[0]*sizeof(int), n, cudaMemcpyHostToDevice, tid, -2, -2);
                 }
                 if(range[4] > 0){
                     offset =  idx[4]*32*sizeof(int);
 					offset2 = idx[4]*32;
-					myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[1], d+offset2, V*sizeof(int), range[4]*sizeof(int), n, cudaMemcpyHostToDevice, tid, -3, -3);
+					myCudaMemcpy2D((char*)d_ptr[1]+offset, pitch[tid], d+offset2, V*sizeof(int), range[4]*sizeof(int), n, cudaMemcpyHostToDevice, tid, -3, -3);
                 }
-                if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[1], n, -1,-1, r);
-                //test<<<1,1>>>(d_ptr[1], pitch[1], n, -1,-1, r);
+                if(debug==1)test<<<1,1>>>(d_ptr[1], pitch[tid], n, -1,-1, r);
+                //test<<<1,1>>>(d_ptr[1], pitch[tid], n, -1,-1, r);
             }
         }
         cudaFree(d_ptr[tid]);
