@@ -8,12 +8,27 @@ void input(char *inFileName);
 void output(char *outFileName);
 int *d_ptr;
 size_t pitch;
-int size = 3*32*32*sizeof(int);
-dim3 block(32,32);
-
+#define BF 32
+int size = 3*BF*BF*sizeof(int);
+dim3 block(BF,BF);
+double totalTime = 0;
+double cummTime = 0;
+double IOTime = 0;
+int B;
+struct timespec diff(struct timespec start, struct timespec end) {
+    struct timespec temp;
+    if ((end.tv_nsec-start.tv_nsec)<0) {
+        temp.tv_sec = end.tv_sec-start.tv_sec-1;
+        temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+    } else {
+        temp.tv_sec = end.tv_sec-start.tv_sec;
+        temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+    }
+    return temp;
+}
 void block_FW(int B);
 int ceil(int a, int b);
-__global__ void cal(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
+__global__ void cal(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
 void kernel(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch);
 
 int n, m;	// Number of vertices, edges
@@ -21,17 +36,27 @@ static int Dist[V][V];
 
 int main(int argc, char* argv[])
 {
+	struct timespec start, end, temp;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 	input(argv[1]);
-	int B = atoi(argv[3]);
+	B = atoi(argv[3]);
 	block_FW(B);
 
 	output(argv[2]);
-
-	return 0;
+	clock_gettime(CLOCK_MONOTONIC, &end);
+    temp = diff(start, end);
+    double time_used = temp.tv_sec + (double) temp.tv_nsec / 1000000000.0;
+	totalTime += time_used;
+    totalTime -= cummTime;
+    totalTime -= IOTime;
+    printf("%f %f %f\n", totalTime, cummTime, IOTime);
+	return 0; 
 }
 
 void input(char *inFileName)
 {
+	struct timespec start, end, temp;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 	FILE *infile = fopen(inFileName, "r");
 	fscanf(infile, "%d %d", &n, &m);
 
@@ -48,10 +73,16 @@ void input(char *inFileName)
 		Dist[a][b] = v;
 	}
     fclose(infile);
+	clock_gettime(CLOCK_MONOTONIC, &end);
+    temp = diff(start, end);
+    double time_used = temp.tv_sec + (double) temp.tv_nsec / 1000000000.0;
+    IOTime += time_used;
 }
 
 void output(char *outFileName)
 {
+	struct timespec start, end, temp;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 	FILE *outfile = fopen(outFileName, "w");
 	for (int i = 0; i < n; ++i) {
 		for (int j = 0; j < n; ++j) {
@@ -63,6 +94,10 @@ void output(char *outFileName)
 		fwrite(Dist[i], sizeof(int), n, outfile);
 	}
     fclose(outfile);
+	clock_gettime(CLOCK_MONOTONIC, &end);
+    temp = diff(start, end);
+    double time_used = temp.tv_sec + (double) temp.tv_nsec / 1000000000.0;
+    IOTime += time_used;
 }
 
 int ceil(int a, int b)
@@ -83,10 +118,10 @@ void test(int *d_ptr, size_t pitch, int n){
 }
 
 void kernel(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch){
-    int num_block_width = ceil(32*block_width,32);
-    int num_block_height = ceil(32*block_height,32);
+    int num_block_width = ceil(B*block_width,B);
+    int num_block_height = ceil(B*block_height,B);
     dim3 grid(num_block_width, num_block_height);
-    cal<<<grid,block,size>>>(Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
+    cal<<<grid,block,size>>>(B, Round, block_start_x, block_start_y, block_width,block_height, n, d_ptr, pitch);
 }
 
 void block_FW(int B)
@@ -145,21 +180,21 @@ void block_FW(int B)
 }
 
 __global__
-void cal(int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch)
+void cal(int B, int Round, int block_start_x, int block_start_y, int block_width, int block_height, int n, int *d_ptr, size_t pitch)
 {
     // shared memory
-    __shared__ int dist[32][32];
-    __shared__ int rowBlock[32][32];
-    __shared__ int colBlock[32][32];
+    __shared__ int dist[BF][BF];
+    __shared__ int rowBlock[BF][BF];
+    __shared__ int colBlock[BF][BF];
 
     int b_x = blockIdx.x * blockDim.x + threadIdx.x;
     int b_y = blockIdx.y * blockDim.y + threadIdx.y;
-    int tidx = block_start_x * 32 + b_x;
-    int tidy = block_start_y * 32 + b_y;
-    //int inRange = (tidx < n) && (tidy < n) && (b_x < block_width*32) && (b_y < block_height*32); 
+    int tidx = block_start_x * B + b_x;
+    int tidy = block_start_y * B + b_y;
+    //int inRange = (tidx < n) && (tidy < n) && (b_x < block_width*B) && (b_y < block_height*B); 
     int inRange = (tidx < n) && (tidy < n); 
-    int k_start = Round*32; // k_start
-    int k_end = (Round+1)*32;
+    int k_start = Round*B; // k_start
+    int k_end = (Round+1)*B;
     // copy current block
     if (inRange){
         int *row = (int *)((char*)d_ptr + tidy * pitch);
@@ -181,7 +216,7 @@ void cal(int Round, int block_start_x, int block_start_y, int block_width, int b
     __syncthreads();
 
     // current k = Round*B ~ Round*B+size-1
-    for(int k = 0; (k < 32) && (k_start+k < n); k++){
+    for(int k = 0; (k < B) && (k_start+k < n); k++){
         if (inRange){
             int ik = rowBlock[threadIdx.y][k];
             int kj = colBlock[k][threadIdx.x];
